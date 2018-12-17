@@ -26,7 +26,7 @@ argparser.add_argument(
     '-d',
     '--data_path',
     help="path to numpy data file (.npz) containing np.object array 'boxes' and np.uint8 array 'images'",
-    default=os.path.join('data', 'data_training_set.npz'))
+    default=os.path.join('data', 'clusters_cleaned'))
 
 argparser.add_argument(
     '-a',
@@ -40,25 +40,18 @@ argparser.add_argument(
     help='path to classes file, defaults to pascal_classes.txt',
     default=os.path.join('model_data', 'league_classes.txt'))
 
-YOLO_ANCHORS = np.array(
-    ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
-     (7.88282, 3.52778), (9.77052, 9.16828)))
+argparser.add_argument(
+    '-p',
+    '--processor',
+    help='Use CPU or GPU for acceleration (Default: GPU)',
+    default='GPU',
+    nargs='?',
+    choices=['cpu', 'gpu'])
 
-
-debug = False
-
-BATCH_SIZE_1 = 32
-BATCH_SIZE_2 = 8
-EPOCHS_1 = 5
-EPOCHS_2 = 30
-EPOCHS_3 = 30
-
-if debug:
-    BATCH_SIZE_1 = 2
-    BATCH_SIZE_2 = 2
-    EPOCHS_1 = 1
-    EPOCHS_2 = 1
-    EPOCHS_3 = 1
+argparser.add_argument(
+    '--debug',
+    help='limit EPOCHS size to 1, for debugging only (Default: no debug)',
+    action='store_true')
 
 class TrainingData:
     # the dataset is broken up in to "clusters"
@@ -68,7 +61,7 @@ class TrainingData:
     #
     # all_npz_files_clusters is a list paths to all the npz clusters.
     # i load these in on a need basis.
-    def __init__(self, all_train_npz_clusters, all_val_npz_clusters):
+    def __init__(self, all_train_npz_clusters, all_val_npz_clusters, anchors):
 
         # set up our clusters
         self.all_train_npz_clusters = all_train_npz_clusters
@@ -95,6 +88,8 @@ class TrainingData:
         self.train_batch_pointer = 0
         self.val_batch_pointer = 0
 
+        # YOLO anchors
+        self.anchors = anchors
 
     def load_train_cluster(self):
 
@@ -143,7 +138,7 @@ class TrainingData:
             # print(boxes_to_process)
             # processed
             p_images, p_boxes = process_data(images_to_process, boxes_to_process)
-            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, YOLO_ANCHORS)
+            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, self.anchors)
 
             self.train_batch_pointer += batch_size
             yield [p_images, p_boxes, detectors_mask, matching_true_boxes],  np.zeros(len(p_images))
@@ -160,7 +155,7 @@ class TrainingData:
             boxes_to_process = self.val_boxes[initial_index:end_index]
             # processed
             p_images, p_boxes = process_data(images_to_process, boxes_to_process)
-            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, YOLO_ANCHORS)
+            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, self.anchors)
 
             self.val_batch_pointer += batch_size
             yield [p_images, p_boxes, detectors_mask, matching_true_boxes],  np.zeros(len(p_images))
@@ -187,6 +182,12 @@ class TrainingData:
         return int(steps / batch_size)
 
 def _main(args):
+    if args.debug:
+        print("RUNNING IN DEBUG MODE, 1 RUN FOR EPOCS ONLY")
+        batches = {'BATCH_SIZE_1': 2, 'BATCH_SIZE_2' : 2, 'EPOCHS_1': 1, 'EPOCHS_2': 1, 'EPOCHS_3': 1}
+    else:
+        batches = {'BATCH_SIZE_1': 32, 'BATCH_SIZE_2' : 8, 'EPOCHS_1': 5, 'EPOCHS_2': 30, 'EPOCHS_3': 30}
+
     data_path = os.path.expanduser(args.data_path)
     classes_path = os.path.expanduser(args.classes_path)
     anchors_path = os.path.expanduser(args.anchors_path)
@@ -197,26 +198,27 @@ def _main(args):
     # custom data saved as a numpy file.
     # data = (np.load(data_path))
     # easy class to handle all the data
-    train_clusts = os.listdir('/media/student/DATA/clusters_cleaned/train/')
-    val_clusts = os.listdir('/media/student/DATA/clusters_cleaned/val/')
+    train_clusts = os.listdir(os.path.join(data_path, 'train'))
+    val_clusts = os.listdir(os.path.join(data_path, 'val'))
 
     train_clus_clean  = []
     val_clus_clean = []
     for folder_name in train_clusts:
-        train_clus_clean.append('/media/student/DATA/clusters_cleaned/train/' + folder_name)
+        train_clus_clean.append(os.path.join(data_path, 'train', folder_name))
     for folder_name in val_clusts:
-        val_clus_clean.append('/media/student/DATA/clusters_cleaned/val/' + folder_name)
+        val_clus_clean.append(os.path.join(data_path, 'val', folder_name))
 
-    data = TrainingData(train_clus_clean, val_clus_clean)
+    data = TrainingData(train_clus_clean, val_clus_clean, anchors)
 
-    anchors = YOLO_ANCHORS
-    model_body, model = create_model(anchors, class_names)
+    anchors = get_anchors(anchors_path)
+    model_body, model = create_model(anchors, class_names, (args.processor).lower())
 
     train(
         model,
         class_names,
         anchors,
-        data
+        data,
+        batches
     )
 
     # here i just pass in the val set of images
@@ -224,7 +226,7 @@ def _main(args):
     boxes = None
 
     images, boxes = process_data(data.val_images[0:500], data.val_boxes[0:500])
-    if debug:
+    if args.debug:
         images, boxes = process_data(data.val_images[0:10], data.val_boxes[0:10])
     draw(model_body,
         class_names,
@@ -309,7 +311,7 @@ def get_detector_mask(boxes, anchors):
 
     return np.array(detectors_mask), np.array(matching_true_boxes)
 
-def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
+def create_model(anchors, class_names, load_pretrained=True, freeze_body=True, processor='cpu'):
     '''
     returns the body of the model and the model
 
@@ -359,7 +361,8 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
     model_body = Model(image_input, final_layer)
 
     # Place model loss on CPU to reduce GPU memory usage.
-    with tf.device('/cpu:0'):
+    # with tf.device('/device:GPU:0'):
+    with tf.device('/%s:0' % processor):
         # TODO: Replace Lambda with custom Keras layer for loss.
         model_loss = Lambda(
             yolo_loss,
@@ -377,7 +380,7 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
 
     return model_body, model
 
-def train(model, class_names, anchors, data):
+def train(model, class_names, anchors, data, batches):
     '''
     retrain/fine-tune the model
 
@@ -398,12 +401,12 @@ def train(model, class_names, anchors, data):
                                  save_weights_only=True, save_best_only=True)
     early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
 
-    print("Training on %d images " % (data.get_train_steps(BATCH_SIZE_1) * BATCH_SIZE_1))
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_1),
-               steps_per_epoch=data.get_train_steps(BATCH_SIZE_1),
-               epochs=EPOCHS_1,
-               validation_data=data.load_val_batch(BATCH_SIZE_1),
-               validation_steps=data.get_val_steps(BATCH_SIZE_1),
+    print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_1']) * batches['BATCH_SIZE_1']))
+    model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_1']),
+               steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_1']),
+               epochs=batches['EPOCHS_1'],
+               validation_data=data.load_val_batch(batches['BATCH_SIZE_1']),
+               validation_steps=data.get_val_steps(batches['BATCH_SIZE_1']),
                callbacks=[logging])
 
     model.save_weights('trained_stage_1.h5')
@@ -419,21 +422,21 @@ def train(model, class_names, anchors, data):
         })  # This is a hack to use the custom loss function in the last layer.
 
     print("Running second....")
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_2),
-              steps_per_epoch=data.get_train_steps(BATCH_SIZE_2),
-              epochs=EPOCHS_2,
-              validation_data=data.load_val_batch(BATCH_SIZE_2),
-              validation_steps=data.get_val_steps(BATCH_SIZE_2),
+    model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_2']),
+              steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_2']),
+              epochs=batches['EPOCHS_2'],
+              validation_data=data.load_val_batch(batches['BATCH_SIZE_2']),
+              validation_steps=data.get_val_steps(batches['BATCH_SIZE_2']),
               callbacks=[logging])
 
     model.save_weights('trained_stage_2.h5')
 
     # yad2k calls for smaller batches here
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_2),
-              steps_per_epoch=data.get_train_steps(BATCH_SIZE_2),
-              epochs=EPOCHS_3,
-              validation_data=data.load_val_batch(BATCH_SIZE_2),
-              validation_steps=data.get_val_steps(BATCH_SIZE_2),
+    model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_2']),
+              steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_2']),
+              epochs=batches['EPOCHS_3'],
+              validation_data=data.load_val_batch(batches['BATCH_SIZE_2']),
+              validation_steps=data.get_val_steps(batches['BATCH_SIZE_2']),
               callbacks=[logging, checkpoint, early_stopping])
 
     model.save_weights('trained_stage_3.h5')
@@ -462,7 +465,7 @@ def draw(model_body, class_names, anchors, image_data, image_set='val',
     yolo_outputs = yolo_head(model_body.output, anchors, len(class_names))
     input_image_shape = K.placeholder(shape=(2, ))
     boxes, scores, classes = yolo_eval(
-        yolo_outputs, input_image_shape, score_threshold=0.07, iou_threshold=0)
+        yolo_outputs, input_image_shape, score_threshold=0.07, iou_threshold=0.0)
 
     # Run prediction on overfit image.
     sess = K.get_session()  # TODO: Remove dependence on Tensorflow session.
