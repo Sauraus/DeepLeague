@@ -9,10 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import PIL
 import tensorflow as tf
+from tensorflow.python.client import device_lib
 from keras import backend as K
 from keras.layers import Input, Lambda, Conv2D
 from keras.models import load_model, Model
 from keras.callbacks import TensorBoard, ModelCheckpoint, EarlyStopping
+from keras.utils import multi_gpu_model
 
 from yad2k.models.keras_yolo import (preprocess_true_boxes, yolo_body,
                                      yolo_eval, yolo_head, yolo_loss)
@@ -26,7 +28,7 @@ argparser.add_argument(
     '-d',
     '--data_path',
     help="path to numpy data file (.npz) containing np.object array 'boxes' and np.uint8 array 'images'",
-    default=os.path.join('data', 'data_training_set.npz'))
+    default=os.path.join('data', 'clusters_cleaned'))
 
 argparser.add_argument(
     '-a',
@@ -40,26 +42,28 @@ argparser.add_argument(
     help='path to classes file, defaults to pascal_classes.txt',
     default=os.path.join('model_data', 'league_classes.txt'))
 
+argparser.add_argument(
+    '-m',
+    '--multi_gpu',
+    help='if set model training will be distributed accross all available GPUs',
+    action='store_true')
+
+argparser.add_argument(
+    '-s',
+    '--stage',
+    help='what training stage to jump to, allows to debug training process',
+    default='1',
+    metavar='N',
+    type=int)
+
+argparser.add_argument(
+    '--debug',
+    help='limit EPOCHS size to 1, for debugging only (Default: no debug)',
+    action='store_true')
+
 YOLO_ANCHORS = np.array(
     ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
      (7.88282, 3.52778), (9.77052, 9.16828)))
-
-
-debug = False
-
-BATCH_SIZE_1 = 32
-BATCH_SIZE_2 = 8
-EPOCHS_1 = 5
-EPOCHS_2 = 30
-EPOCHS_3 = 30
-
-if debug:
-    BATCH_SIZE_1 = 2
-    BATCH_SIZE_2 = 2
-    EPOCHS_1 = 1
-    EPOCHS_2 = 1
-    EPOCHS_3 = 1
-
 class TrainingData:
     # the dataset is broken up in to "clusters"
     # these are npz files with 20 games worth of data.
@@ -68,7 +72,7 @@ class TrainingData:
     #
     # all_npz_files_clusters is a list paths to all the npz clusters.
     # i load these in on a need basis.
-    def __init__(self, all_train_npz_clusters, all_val_npz_clusters):
+    def __init__(self, all_train_npz_clusters, all_val_npz_clusters, anchors):
 
         # set up our clusters
         self.all_train_npz_clusters = all_train_npz_clusters
@@ -95,6 +99,8 @@ class TrainingData:
         self.train_batch_pointer = 0
         self.val_batch_pointer = 0
 
+        # YOLO anchors
+        self.anchors = anchors
 
     def load_train_cluster(self):
 
@@ -109,7 +115,7 @@ class TrainingData:
         # mod length of all_train_npz_clusters keeps us in range
         self.train_cluster_index = (self.train_cluster_index + 1) % len(self.all_train_npz_clusters)
         # then load it
-        print("Loading new cluster... ", self.all_train_npz_clusters[self.train_cluster_index])
+        print("\nLoading new cluster... ", self.all_train_npz_clusters[self.train_cluster_index])
         self.curr_train_npz_cluster = np.load(self.all_train_npz_clusters[self.train_cluster_index])
         # then append proper images/boxes
         self.train_images = self.curr_train_npz_cluster['images']
@@ -130,7 +136,7 @@ class TrainingData:
             # print("TBP.. ", self.train_batch_pointer)
             # this means we have reached the end of our cluster and need to load another.
             # TODO: this is sort of bad because we waste the frames left over.
-            # ex batch size 32, cluster as 63 images, after loading first 32 images
+            # ex batch size 32, cluster has 63 images, after loading first 32 images
             # 32 + 32 > 63, so we skip over all this precious data!
             if self.train_batch_pointer + batch_size > len(self.train_images):
                 self.load_train_cluster()
@@ -143,7 +149,7 @@ class TrainingData:
             # print(boxes_to_process)
             # processed
             p_images, p_boxes = process_data(images_to_process, boxes_to_process)
-            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, YOLO_ANCHORS)
+            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, self.anchors)
 
             self.train_batch_pointer += batch_size
             yield [p_images, p_boxes, detectors_mask, matching_true_boxes],  np.zeros(len(p_images))
@@ -160,7 +166,7 @@ class TrainingData:
             boxes_to_process = self.val_boxes[initial_index:end_index]
             # processed
             p_images, p_boxes = process_data(images_to_process, boxes_to_process)
-            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, YOLO_ANCHORS)
+            detectors_mask, matching_true_boxes = get_detector_mask(p_boxes, self.anchors)
 
             self.val_batch_pointer += batch_size
             yield [p_images, p_boxes, detectors_mask, matching_true_boxes],  np.zeros(len(p_images))
@@ -187,6 +193,17 @@ class TrainingData:
         return int(steps / batch_size)
 
 def _main(args):
+    if args.multi_gpu:
+        multi_gpu = len(get_available_gpus())
+    else:
+        multi_gpu = 1
+
+    if args.debug:
+        print("RUNNING IN DEBUG MODE, 1 RUN FOR EPOCS ONLY")
+        batches = {'BATCH_SIZE_1': 2 * multi_gpu, 'BATCH_SIZE_2' : 2 * multi_gpu, 'BATCH_SIZE_3' : 2 * multi_gpu, 'EPOCHS_1': 1, 'EPOCHS_2': 1, 'EPOCHS_3': 1}
+    else:
+        batches = {'BATCH_SIZE_1': 32 * multi_gpu, 'BATCH_SIZE_2' : 16 * multi_gpu, 'BATCH_SIZE_3' : 8 * multi_gpu, 'EPOCHS_1': 5, 'EPOCHS_2': 30, 'EPOCHS_3': 30}
+
     data_path = os.path.expanduser(args.data_path)
     classes_path = os.path.expanduser(args.classes_path)
     anchors_path = os.path.expanduser(args.anchors_path)
@@ -197,26 +214,29 @@ def _main(args):
     # custom data saved as a numpy file.
     # data = (np.load(data_path))
     # easy class to handle all the data
-    train_clusts = os.listdir('/media/student/DATA/clusters_cleaned/train/')
-    val_clusts = os.listdir('/media/student/DATA/clusters_cleaned/val/')
+    train_clusts = os.listdir(os.path.join(data_path, 'train'))
+    val_clusts = os.listdir(os.path.join(data_path, 'val'))
 
     train_clus_clean  = []
     val_clus_clean = []
     for folder_name in train_clusts:
-        train_clus_clean.append('/media/student/DATA/clusters_cleaned/train/' + folder_name)
+        train_clus_clean.append(os.path.join(data_path, 'train', folder_name))
     for folder_name in val_clusts:
-        val_clus_clean.append('/media/student/DATA/clusters_cleaned/val/' + folder_name)
+        val_clus_clean.append(os.path.join(data_path, 'val', folder_name))
 
-    data = TrainingData(train_clus_clean, val_clus_clean)
+    data = TrainingData(train_clus_clean, val_clus_clean, anchors)
 
-    anchors = YOLO_ANCHORS
+    anchors = get_anchors(anchors_path)
     model_body, model = create_model(anchors, class_names)
 
     train(
         model,
         class_names,
         anchors,
-        data
+        data,
+        batches,
+        args.stage,
+        multi_gpu
     )
 
     # here i just pass in the val set of images
@@ -224,7 +244,7 @@ def _main(args):
     boxes = None
 
     images, boxes = process_data(data.val_images[0:500], data.val_boxes[0:500])
-    if debug:
+    if args.debug:
         images, boxes = process_data(data.val_images[0:10], data.val_boxes[0:10])
     draw(model_body,
         class_names,
@@ -233,6 +253,10 @@ def _main(args):
         image_set='val', # assumes training/validation split is 0.9
         weights_name='trained_stage_3_best.h5',
         save_all=False)
+
+def get_available_gpus():
+    local_device_protos = device_lib.list_local_devices()
+    return [x.name for x in local_device_protos if x.device_type == 'GPU']
 
 def get_classes(classes_path):
     '''loads the classes'''
@@ -359,17 +383,18 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
     model_body = Model(image_input, final_layer)
 
     # Place model loss on CPU to reduce GPU memory usage.
+    # with tf.device('/device:gpu:0'):
+    print('Loss function bound to cpu:0')
     with tf.device('/cpu:0'):
-        # TODO: Replace Lambda with custom Keras layer for loss.
         model_loss = Lambda(
             yolo_loss,
             output_shape=(1, ),
             name='yolo_loss',
             arguments={'anchors': anchors,
-                       'num_classes': len(class_names)})([
-                           model_body.output, boxes_input,
-                           detectors_mask_input, matching_boxes_input
-                       ])
+                        'num_classes': len(class_names)})([
+                            model_body.output, boxes_input,
+                            detectors_mask_input, matching_boxes_input
+                        ])
 
     model = Model(
         [model_body.input, boxes_input, detectors_mask_input,
@@ -377,7 +402,7 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
 
     return model_body, model
 
-def train(model, class_names, anchors, data):
+def train(model, class_names, anchors, data, batches, stage, multi_gpu):
     '''
     retrain/fine-tune the model
 
@@ -387,56 +412,102 @@ def train(model, class_names, anchors, data):
 
     best weights according to val_loss is saved as trained_stage_3_best.h5
     '''
-    model.compile(
-        optimizer='adam', loss={
-            'yolo_loss': lambda y_true, y_pred: y_pred
-        })  # This is a hack to use the custom loss function in the last layer.
-
-
     logging = TensorBoard()
-    checkpoint = ModelCheckpoint("trained_stage_3_best.h5", monitor='val_loss',
-                                 save_weights_only=True, save_best_only=True)
-    early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
 
-    print("Training on %d images " % (data.get_train_steps(BATCH_SIZE_1) * BATCH_SIZE_1))
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_1),
-               steps_per_epoch=data.get_train_steps(BATCH_SIZE_1),
-               epochs=EPOCHS_1,
-               validation_data=data.load_val_batch(BATCH_SIZE_1),
-               validation_steps=data.get_val_steps(BATCH_SIZE_1),
-               callbacks=[logging])
+    if stage == 1:
+        if multi_gpu > 1: # We can do > 1 here because tensorflow will automatically choose GPU over CPU if available
+            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
+            print("Training using multiple GPUs..")
+        else:
+            parallel_model = model
+            print("Training using single GPU or CPU..")
 
-    model.save_weights('trained_stage_1.h5')
-    print("Saved!")
+        parallel_model.compile(
+            optimizer='adam', loss={
+                'yolo_loss': lambda y_true, y_pred: y_pred[0]
+            })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
 
-    model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
+        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_1']) * batches['BATCH_SIZE_1']))
+        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_1']),
+                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_1']),
+                epochs=batches['EPOCHS_1'],
+                validation_data=data.load_val_batch(batches['BATCH_SIZE_1']),
+                validation_steps=data.get_val_steps(batches['BATCH_SIZE_1']),
+                callbacks=[logging])
 
-    model.load_weights('trained_stage_1.h5')
+        parallel_model.save_weights('trained_stage_1.h5')
+        print("Saved trained_stage_1.h5")
 
-    model.compile(
-        optimizer='adam', loss={
-            'yolo_loss': lambda y_true, y_pred: y_pred
-        })  # This is a hack to use the custom loss function in the last layer.
+    if stage == 1 or stage == 2:
+        model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
 
-    print("Running second....")
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_2),
-              steps_per_epoch=data.get_train_steps(BATCH_SIZE_2),
-              epochs=EPOCHS_2,
-              validation_data=data.load_val_batch(BATCH_SIZE_2),
-              validation_steps=data.get_val_steps(BATCH_SIZE_2),
-              callbacks=[logging])
+        if multi_gpu > 1:
+            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
+            print("Training using multiple GPUs..")
+        else:
+            parallel_model = model
+            print("Training using single GPU or CPU..")
 
-    model.save_weights('trained_stage_2.h5')
+        parallel_model.compile(
+            optimizer='adam', loss={
+                'yolo_loss': lambda y_true, y_pred: y_pred[0]
+            })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
 
-    # yad2k calls for smaller batches here
-    model.fit_generator(data.load_train_batch(BATCH_SIZE_2),
-              steps_per_epoch=data.get_train_steps(BATCH_SIZE_2),
-              epochs=EPOCHS_3,
-              validation_data=data.load_val_batch(BATCH_SIZE_2),
-              validation_steps=data.get_val_steps(BATCH_SIZE_2),
-              callbacks=[logging, checkpoint, early_stopping])
+        if os.path.isfile('trained_stage_2_best.h5'):
+            model.load_weights('trained_stage_2_best.h5')
+            print("Loaded trained_stage_2_best.h5")
+        else:
+            model.load_weights('trained_stage_1.h5')
+            print("Loaded trained_stage_1.h5")
 
-    model.save_weights('trained_stage_3.h5')
+        checkpoint = ModelCheckpoint("trained_stage_2_best.h5", monitor='val_loss', save_weights_only=True, save_best_only=True)
+
+        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_2']) * batches['BATCH_SIZE_2']))
+        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_2']),
+                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_2']),
+                epochs=batches['EPOCHS_2'],
+                validation_data=data.load_val_batch(batches['BATCH_SIZE_2']),
+                validation_steps=data.get_val_steps(batches['BATCH_SIZE_2']),
+                callbacks=[logging, checkpoint])
+
+        parallel_model.save_weights('trained_stage_2.h5')
+        print("Saved trained_stage_2.h5")
+    
+    if stage == 1 or stage == 2 or stage == 3:
+        model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
+
+        if multi_gpu > 1:
+            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
+            print("Training using multiple GPUs..")
+        else:
+            parallel_model = model
+            print("Training using single GPU or CPU..")
+
+        parallel_model.compile(
+            optimizer='adam', loss={
+                'yolo_loss': lambda y_true, y_pred: y_pred[0]
+            })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
+
+        if os.path.isfile('trained_stage_3_best.h5'):
+            parallel_model.load_weights('trained_stage_2.h5')
+            print("Loaded trained_stage_3_best.h5")
+        else:
+            parallel_model.load_weights('trained_stage_2.h5')
+            print("Loaded trained_stage_2.h5")
+
+        checkpoint = ModelCheckpoint("trained_stage_3_best.h5", monitor='val_loss', save_weights_only=True, save_best_only=True)
+        early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
+
+        # yad2k calls for smaller batches here
+        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_3']) * batches['BATCH_SIZE_3']))
+        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_3']),
+                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_3']),
+                epochs=batches['EPOCHS_3'],
+                validation_data=data.load_val_batch(batches['BATCH_SIZE_3']),
+                validation_steps=data.get_val_steps(batches['BATCH_SIZE_3']),
+                callbacks=[logging, checkpoint, early_stopping])
+
+        parallel_model.save_weights('trained_stage_3.h5')
 
 def draw(model_body, class_names, anchors, image_data, image_set='val',
             weights_name='trained_stage_3_best.h5', out_path="output_images", save_all=True):
@@ -462,7 +533,7 @@ def draw(model_body, class_names, anchors, image_data, image_set='val',
     yolo_outputs = yolo_head(model_body.output, anchors, len(class_names))
     input_image_shape = K.placeholder(shape=(2, ))
     boxes, scores, classes = yolo_eval(
-        yolo_outputs, input_image_shape, score_threshold=0.07, iou_threshold=0)
+        yolo_outputs, input_image_shape, score_threshold=0.07, iou_threshold=0.0)
 
     # Run prediction on overfit image.
     sess = K.get_session()  # TODO: Remove dependence on Tensorflow session.
