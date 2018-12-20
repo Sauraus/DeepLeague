@@ -154,6 +154,7 @@ def yolo_loss(args,
               num_classes,
               rescore_confidence=False,
               print_loss=False):
+    from yad2k.models.keras_yolo import yolo_head # https://github.com/keras-team/keras/issues/5088#issuecomment-273851273
     """YOLO localization loss function.
 
     Parameters
@@ -295,7 +296,7 @@ def yolo_loss(args,
             ],
             message='yolo_loss, conf_loss, class_loss, box_coord_loss:')
 
-    return total_loss
+    return K.expand_dims(total_loss, axis=0) # return total_loss https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
 
 
 def yolo(inputs, anchors, num_classes):
