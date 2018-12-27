@@ -2,7 +2,6 @@
 This is a script that can be used to retrain the YOLOv2 model for your own dataset.
 """
 import argparse
-
 import os
 import sys
 import matplotlib.pyplot as plt
@@ -49,14 +48,6 @@ argparser.add_argument(
     action='store_true')
 
 argparser.add_argument(
-    '-s',
-    '--stage',
-    help='what training stage to jump to, allows to debug training process',
-    default='1',
-    metavar='N',
-    type=int)
-
-argparser.add_argument(
     '--debug',
     help='limit EPOCHS size to 1, for debugging only (Default: no debug)',
     action='store_true')
@@ -64,6 +55,7 @@ argparser.add_argument(
 YOLO_ANCHORS = np.array(
     ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
      (7.88282, 3.52778), (9.77052, 9.16828)))
+
 class TrainingData:
     # the dataset is broken up in to "clusters"
     # these are npz files with 20 games worth of data.
@@ -173,23 +165,23 @@ class TrainingData:
 
     # total number of batches to run for one epoch
     def get_train_steps(self, batch_size):
-        print("Getting train steps...")
+        print("Getting training steps...")
         steps = 0
         for cluster in self.all_train_npz_clusters:
             loaded_clust = np.load(cluster)
             steps += len(loaded_clust['images'])
-        print(steps / batch_size)
+        print("Got %d training steps..." % (steps / batch_size))
         return int(steps / batch_size)
 
     # total number of batches to run for validation
     def get_val_steps(self, batch_size):
-        print("Getting val steps...")
+        print("Getting validation steps...")
         steps = 0
         for cluster in self.all_val_npz_clusters:
             loaded_clust = np.load(cluster)
             steps += len(loaded_clust['images'])
         # return int(len(self.val_images) / batch_size)
-        print(steps / batch_size)
+        print("Got %d validation steps..." % (steps / batch_size))
         return int(steps / batch_size)
 
 def _main(args):
@@ -199,10 +191,10 @@ def _main(args):
         multi_gpu = 1
 
     if args.debug:
-        print("RUNNING IN DEBUG MODE, 1 RUN FOR EPOCS ONLY")
-        batches = {'BATCH_SIZE_1': 2 * multi_gpu, 'BATCH_SIZE_2' : 2 * multi_gpu, 'BATCH_SIZE_3' : 2 * multi_gpu, 'EPOCHS_1': 1, 'EPOCHS_2': 1, 'EPOCHS_3': 1}
+        print("RUNNING IN DEBUG MODE, ALL EPOCHS ARE 1 ONLY")
+        batches = {'BATCH_SIZE_1': 32 * multi_gpu, 'BATCH_SIZE_2' : 8 * multi_gpu, 'BATCH_SIZE_3' : 8 * multi_gpu, 'EPOCHS_1': 1, 'EPOCHS_2': 1, 'EPOCHS_3': 1}
     else:
-        batches = {'BATCH_SIZE_1': 32 * multi_gpu, 'BATCH_SIZE_2' : 16 * multi_gpu, 'BATCH_SIZE_3' : 8 * multi_gpu, 'EPOCHS_1': 5, 'EPOCHS_2': 30, 'EPOCHS_3': 30}
+        batches = {'BATCH_SIZE_1': 32 * multi_gpu, 'BATCH_SIZE_2' : 8 * multi_gpu, 'BATCH_SIZE_3' : 4 * multi_gpu, 'EPOCHS_1': 5, 'EPOCHS_2': 30, 'EPOCHS_3': 30}
 
     data_path = os.path.expanduser(args.data_path)
     classes_path = os.path.expanduser(args.classes_path)
@@ -235,7 +227,6 @@ def _main(args):
         anchors,
         data,
         batches,
-        args.stage,
         multi_gpu
     )
 
@@ -402,7 +393,7 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
 
     return model_body, model
 
-def train(model, class_names, anchors, data, batches, stage, multi_gpu):
+def train(model, class_names, anchors, data, batches, multi_gpu):
     '''
     retrain/fine-tune the model
 
@@ -414,100 +405,68 @@ def train(model, class_names, anchors, data, batches, stage, multi_gpu):
     '''
     logging = TensorBoard()
 
-    if stage == 1:
-        if multi_gpu > 1: # We can do > 1 here because tensorflow will automatically choose GPU over CPU if available
-            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
-            print("Training using multiple GPUs..")
-        else:
-            parallel_model = model
-            print("Training using single GPU or CPU..")
-
+    if multi_gpu > 1: # We can do > 1 here because tensorflow will automatically choose GPU over CPU if available
+        parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
+        print("Training using multiple GPUs..")
         parallel_model.compile(
             optimizer='adam', loss={
                 'yolo_loss': lambda y_true, y_pred: y_pred[0]
             })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
+    else:
+        parallel_model = model
+        print("Training using single GPU or CPU..")
+        parallel_model.compile(
+            optimizer='adam', loss={
+                'yolo_loss': lambda y_true, y_pred: y_pred
+            })
 
-        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_1']) * batches['BATCH_SIZE_1']))
-        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_1']),
-                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_1']),
-                epochs=batches['EPOCHS_1'],
-                validation_data=data.load_val_batch(batches['BATCH_SIZE_1']),
-                validation_steps=data.get_val_steps(batches['BATCH_SIZE_1']),
-                callbacks=[logging])
+    print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_1']) * batches['BATCH_SIZE_1']))
+    parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_1']),
+            steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_1']),
+            epochs=batches['EPOCHS_1'],
+            validation_data=data.load_val_batch(batches['BATCH_SIZE_1']),
+            validation_steps=data.get_val_steps(batches['BATCH_SIZE_1']),
+            callbacks=[logging])
 
-        parallel_model.save_weights('trained_stage_1.h5')
-        print("Saved trained_stage_1.h5")
+    model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
 
-    if stage == 1 or stage == 2:
-        model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
-
-        if multi_gpu > 1:
-            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
-            print("Training using multiple GPUs..")
-        else:
-            parallel_model = model
-            print("Training using single GPU or CPU..")
-
+    if multi_gpu > 1: # We can do > 1 here because tensorflow will automatically choose GPU over CPU if available
+        parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
+        print("Training using multiple GPUs..")
         parallel_model.compile(
             optimizer='adam', loss={
                 'yolo_loss': lambda y_true, y_pred: y_pred[0]
             })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
-
-        if os.path.isfile('trained_stage_2_best.h5'):
-            model.load_weights('trained_stage_2_best.h5')
-            print("Loaded trained_stage_2_best.h5")
-        else:
-            model.load_weights('trained_stage_1.h5')
-            print("Loaded trained_stage_1.h5")
-
-        checkpoint = ModelCheckpoint("trained_stage_2_best.h5", monitor='val_loss', save_weights_only=True, save_best_only=True)
-
-        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_2']) * batches['BATCH_SIZE_2']))
-        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_2']),
-                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_2']),
-                epochs=batches['EPOCHS_2'],
-                validation_data=data.load_val_batch(batches['BATCH_SIZE_2']),
-                validation_steps=data.get_val_steps(batches['BATCH_SIZE_2']),
-                callbacks=[logging, checkpoint])
-
-        parallel_model.save_weights('trained_stage_2.h5')
-        print("Saved trained_stage_2.h5")
-    
-    if stage == 1 or stage == 2 or stage == 3:
-        model_body, model = create_model(anchors, class_names, load_pretrained=False, freeze_body=False)
-
-        if multi_gpu > 1:
-            parallel_model = multi_gpu_model(model, multi_gpu, cpu_relocation=True)
-            print("Training using multiple GPUs..")
-        else:
-            parallel_model = model
-            print("Training using single GPU or CPU..")
-
+    else:
+        parallel_model = model
+        print("Training using single GPU or CPU..")
         parallel_model.compile(
             optimizer='adam', loss={
-                'yolo_loss': lambda y_true, y_pred: y_pred[0]
-            })  # This is a hack to use the custom loss function in the last layer. https://github.com/qqwweee/keras-yolo3/issues/129#issuecomment-408855511
+                'yolo_loss': lambda y_true, y_pred: y_pred
+            })
 
-        if os.path.isfile('trained_stage_3_best.h5'):
-            parallel_model.load_weights('trained_stage_2.h5')
-            print("Loaded trained_stage_3_best.h5")
-        else:
-            parallel_model.load_weights('trained_stage_2.h5')
-            print("Loaded trained_stage_2.h5")
+    print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_2']) * batches['BATCH_SIZE_2']))
+    parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_2']),
+            steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_2']),
+            epochs=batches['EPOCHS_2'],
+            validation_data=data.load_val_batch(batches['BATCH_SIZE_2']),
+            validation_steps=data.get_val_steps(batches['BATCH_SIZE_2']),
+            callbacks=[logging])
+  
+    checkpoint = ModelCheckpoint("trained_stage_3_best.h5", monitor='val_loss', save_weights_only=True, save_best_only=True)
+    early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
 
-        checkpoint = ModelCheckpoint("trained_stage_3_best.h5", monitor='val_loss', save_weights_only=True, save_best_only=True)
-        early_stopping = EarlyStopping(monitor='val_loss', min_delta=0, patience=15, verbose=1, mode='auto')
+    # yad2k calls for smaller batches here
+    print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_3']) * batches['BATCH_SIZE_3']))
+    parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_3']),
+            steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_3']),
+            epochs=batches['EPOCHS_3'],
+            validation_data=data.load_val_batch(batches['BATCH_SIZE_3']),
+            validation_steps=data.get_val_steps(batches['BATCH_SIZE_3']),
+            callbacks=[logging, checkpoint, early_stopping])
 
-        # yad2k calls for smaller batches here
-        print("Training on %d images " % (data.get_train_steps(batches['BATCH_SIZE_3']) * batches['BATCH_SIZE_3']))
-        parallel_model.fit_generator(data.load_train_batch(batches['BATCH_SIZE_3']),
-                steps_per_epoch=data.get_train_steps(batches['BATCH_SIZE_3']),
-                epochs=batches['EPOCHS_3'],
-                validation_data=data.load_val_batch(batches['BATCH_SIZE_3']),
-                validation_steps=data.get_val_steps(batches['BATCH_SIZE_3']),
-                callbacks=[logging, checkpoint, early_stopping])
-
-        parallel_model.save_weights('trained_stage_3.h5')
+    parallel_model.save_weights('trained_stage_3.h5')
+    parallel_model.save('trained_model_stage_3.h5')
 
 def draw(model_body, class_names, anchors, image_data, image_set='val',
             weights_name='trained_stage_3_best.h5', out_path="output_images", save_all=True):
