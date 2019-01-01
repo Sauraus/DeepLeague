@@ -12,7 +12,10 @@ import re
 import time
 
 parser = argparse.ArgumentParser(description='Visualize npz cluster ground truth data (or game_data object)')
-parser.add_argument('--path', type=str, default='data_training_set_cluster_0.npz', help='path to npz cluster to visualize')
+parser.add_argument('-p',
+                    '--path',
+                    type=str,
+                    default='data_training_set_cluster_0.npz', help='path to npz cluster to visualize')
 # parser.add_argument('--classes', type=str, default='YAD2K/model_data/league_classes.txt', help='path to .txt file that holds the classes')
 # parser.add_argument('--dataset_type', type=str, default='npz', help='npz or game object')
 # parser.add_argument('--refresh_rate', type=int, default=1000, help='# of seconds between showing each new frame')
@@ -154,6 +157,7 @@ def visualize_npz_data(npz_file_path, all_classes, refresh_rate):
         cv2.imshow("IMAGE", img)
         if cv2.waitKey(refresh_rate)  ==  ord('q'):
             break
+
 def sorted_nicely( l ):
     """ Sorts the given iterable in the way that is expected.
 
@@ -180,7 +184,6 @@ def visualize_frames_on_drive(images_path, refresh_rate):
         if first_run:
             first_run = False
             time.sleep(15)
-
 
 def get_classes(classes_path):
     with open(classes_path) as f:

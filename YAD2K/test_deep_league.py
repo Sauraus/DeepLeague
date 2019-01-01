@@ -55,14 +55,22 @@ parser.add_argument(
     '-out',
     '--output_path',
     type=str,
-    help='path to output test images')
+    help='path to output test images',
+    default='output')
 
 parser.add_argument(
     '-champs',
     '--champs_in_game',
     type=str,
     help='to help avoid bad predictions, tell DeepLeague the 10 champions in the game of the VOD you are passing',
-    default= "")
+    default="")
+
+parser.add_argument(
+    '-mb',
+    '--max_boxes',
+    type=int,
+    help='maximum of champions to identify on the map',
+    default=10)
 
 subparsers = parser.add_subparsers(dest='subcommand')
 
@@ -173,15 +181,15 @@ assert model_output_channels == num_anchors * (num_classes + 5), \
     'Mismatch between model and given anchor and class sizes. ' \
     'Specify matching anchors and classes with --anchors_path and ' \
     '--classes_path flags.'
-print('{} model, anchors, and classes loaded.'.format(model_path))
+print("%s model, %d anchors, and %d classes loaded." % (format(model_path), num_anchors, num_classes))
 
 # Check if model is fully convolutional, assuming channel last order.
 model_image_size = yolo_model.layers[0].input_shape[1:3]
 is_fixed_size = model_image_size != (None, None)
 
 # Generate colors for drawing bounding boxes.
-hsv_tuples = [(x / len(class_names), 1., 1.)
-              for x in range(len(class_names))]
+hsv_tuples = [(x / num_classes, 1., 1.)
+              for x in range(num_classes)]
 colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
 colors = list(
     map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
@@ -192,16 +200,17 @@ random.seed(None)  # Reset seed to default.
 
 # Generate output tensor targets for filtered bounding boxes.
 # TODO: Wrap these backend operations with Keras layers.
-yolo_outputs = yolo_head(yolo_model.output, anchors, len(class_names))
+yolo_outputs = yolo_head(yolo_model.output, anchors, num_classes)
 input_image_shape = K.placeholder(shape=(2, ))
 boxes, scores, classes = yolo_eval(
     yolo_outputs,
     input_image_shape,
+    max_boxes=args.max_boxes,
     score_threshold=args.score_threshold,
     iou_threshold=args.iou_threshold)
 
 # Save the output into a compact JSON file.
-outfile = open('output/game_data.json', 'w')
+outfile = open(os.path.join(output_path, 'game_data.json'), 'w')
 # This will be appended with an object for every frame.
 data_to_write = []
 
@@ -296,7 +305,7 @@ def process_mp4(test_mp4_vod_path):
 
     # forward over to the frames you want to start reading from.
     # manually set this, fps * time in seconds you wanna start from
-    video.set(1, 0);
+    video.set(1, 0)
     success, frame = video.read()
     count = 0
     file_count = 0
@@ -331,7 +340,7 @@ def _main():
             except IsADirectoryError:
                 continue
 
-            image = Image.open(os.path.join(test_images_path, image_file_name)).crop((1645, 805, 1920, 1080))
+            image = Image.open(os.path.join(test_images_path, image_file_name)).crop((1088, 528, 1280, 720))
             test_yolo(image, image_file_name)
 
 
