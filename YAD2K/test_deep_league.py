@@ -170,7 +170,7 @@ with open(anchors_path) as f:
 
 # yolo_model = load_model(model_path)
 yolo_model, _ = create_model(anchors, class_names)
-yolo_model.load_weights('trained_stage_3_best.h5')
+yolo_model.load_weights('trained_stage_3_weights.h5')
 
 # Verify model, anchors, and classes are compatible
 num_classes = len(class_names)
@@ -340,7 +340,7 @@ def _main():
             except IsADirectoryError:
                 continue
 
-            image = Image.open(os.path.join(test_images_path, image_file_name)).crop((1088, 528, 1280, 720))
+            image = Image.open(os.path.join(test_images_path, image_file_name)).crop((1130, 563, 1280, 720))
             test_yolo(image, image_file_name)
 
 
