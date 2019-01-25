@@ -29,18 +29,18 @@ parser_dump.set_defaults(which='dump')
 parser_generate.add_argument(
     '-ni',
     '--number_of_images',
-    help="number of minimap images to generate, to avoid wasting clusters ensure you align on 32 images (Default: 119808)",
+    help="number of minimap images to generate, to avoid wasting clusters ensure you align on 32 images (Default: 50000)",
     metavar='N',
 	type=int,
-	default=119808)
+	default=50000)
 
 parser_generate.add_argument(
 	'-cn',
 	'--number_of_champs_per_minimap',
-	help="number of champions to place on a single minimap image (Default: 30)",
+	help="number of champions to place on a single minimap image (Default: 10)",
 	metavar='N',
 	type=int,
-	default=20)
+	default=10)
 
 parser_generate.add_argument(
 	'-txt',
@@ -83,15 +83,17 @@ def composite_icons(icon_dict, mapping_dict):
 	minimap = minimap.convert('RGBA')
 
 	# We resize the images such that we train on various size minimaps because players can resize their minimaps
-	# We use this https://github.com/AlexeyAB/darknet/blob/master/scripts/gen_anchors.py to calculate the anchors before training
+	# We use this https://github.com/AlexeyAB/darknet/blob/master/scripts/gen_anchors.py to calculate the YOLO2 anchors before training
 	size = random.randint(150, 200)
 	ratio = 295 / size
-	npdata = []
+	npzdata = []
 	data = []
 
 	for champion, value in icon_dict.items():
 		icon = Image.fromarray(np.uint8(value[0]))
-		icon = icon.convert('RGBA')  
+		icon = icon.convert('RGBA')
+		icon_size = random.randint(26, 30)
+		icon = icon.resize((icon_size, icon_size), resample=Image.BILINEAR)
 
 	    # Choose a random x,y position for the icon
 		paste_position = (value[1], value[2])
@@ -116,25 +118,25 @@ def composite_icons(icon_dict, mapping_dict):
 		y_min, y_max = np.min(nz[0]) / ratio, np.max(nz[0]) / ratio
 		# bbox = [x_min, y_min, x_max, y_max] 
 		# cntr = (x_min+ int((x_max-x_min)/2), y_min+int((y_max-y_min)/2))
-		npdata.append((mapping_dict[champion[:-4]], int(x_min + ((x_max - x_min) / 2)), int(y_min + ((y_max - y_min) / 2)), int(28 / ratio), int(28 / ratio)))
+		npzdata.append((mapping_dict[champion[:-4]], int(x_min), int(y_min), int(x_max), int(y_max)))
 		data.append((mapping_dict[champion[:-4]], (x_min + ((x_max - x_min) / 2)) / size, (y_min + ((y_max - y_min) / 2)) / size, (28 / ratio) / size, (28 / ratio) / size))
-	data_array = np.asarray(npdata)
+	npz_data = np.asarray(npzdata)
 	composite = composite.resize((size, size), resample=Image.BILINEAR)
-	return composite, data_array, data
+	return composite, npz_data, data
 
 def load_icons(input_directory):
-	mapping, rsze_icon_dict, rsze_icon_list, count = {}, {}, [], 0
+	mapping, icon_dict, icon_list, count = {}, {}, [], 0
 	outfile = open("league_classes.txt", "w+")
 	for file in os.scandir(input_directory):
 		if file.name[-4:] == ".png":
 			icon = Image.open(file.path)
 			icon = icon.convert('RGBA')
-			rsze_icon_dict[file.name] = icon
-			rsze_icon_list.append(file.name)
+			icon_dict[file.name] = icon
+			icon_list.append(file.name)
 			mapping[file.name[:-4]] = count
 			count+=1
 			outfile.write((file.name[:-4] + '\n'))
-	return rsze_icon_dict, rsze_icon_list, mapping, count
+	return icon_dict, icon_list, mapping, count
 
 def randomize_icons(icon_dict, icon_list, number_of_champs_per_minimap):
 	# Grab X random champs from dictionary:
@@ -214,9 +216,6 @@ def generate(number_of_npz_files, number_of_images, number_of_champs_per_minimap
 				composite_image, icon_bbox, _ = composite_icons(random_icon_dict, mapping_dict)
 				composite_image = composite_image.convert('RGB')
 
-				sample = random.randint(200,240)
-				composite_image_pix = composite_image.resize((sample, sample), resample=Image.BILINEAR)
-				composite_image = composite_image_pix.resize(composite_image.size, Image.NEAREST)
 				# Hack creates stackable array of arrays :
 				composite_array = np.array(np.asarray(composite_image))
 				icon_bbox       = np.array(np.asarray(icon_bbox))
@@ -246,6 +245,7 @@ def generate(number_of_npz_files, number_of_images, number_of_champs_per_minimap
 	print("\nFinal champion count in data set:\n")
 	for key, value in champion_counter.most_common():
 		print(key, ":", value)
+
 
 def dump_images(input_directory, output_directory):
 	for file in os.scandir(input_directory):
