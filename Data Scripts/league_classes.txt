@@ -1,5 +1,7 @@
+TwistedFate
 Akali
 Sivir
+KogMaw
 Nidalee
 Kled
 Rengar
@@ -9,7 +11,7 @@ Leona
 Amumu
 Katarina
 Sona
-Master Yi
+Velkoz
 Nautilus
 Rumble
 Veigar
@@ -17,9 +19,10 @@ Teemo
 Annie
 Blitzcrank
 Alistar
-Tahm Kench
 Kassadin
 Ziggs
+MasterYi
+LeeSin
 Karthus
 Varus
 Vi
@@ -32,30 +35,27 @@ Sejuani
 Yasuo
 Karma
 Ryze
-Kai'Sa
-Rek'Sai
 Gangplank
 Kindred
-LeBlanc
+Leblanc
 Zed
-Kog'Maw
 Syndra
 Warwick
 Ashe
 Malzahar
 Cassiopeia
 Ekko
-Miss Fortune
 Morgana
 Lulu
 Vayne
-Cho'Gath
+Khazix
 Jinx
+XinZhao
 Aatrox
 Thresh
+Kaisa
 Ahri
 Lucian
-Kha'Zix
 Ezreal
 Maokai
 Jhin
@@ -65,15 +65,16 @@ Jayce
 Zoe
 Swain
 Elise
-Twisted Fate
 Hecarim
 Irelia
 Fizz
 Singed
+DrMundo
 Camille
 Soraka
+JarvanIV
 Nocturne
-Fiddlesticks
+FiddleSticks
 Rammus
 Quinn
 Kennen
@@ -88,10 +89,11 @@ Shyvana
 Tryndamere
 Bard
 Kalista
+MissFortune
 Caitlyn
 Janna
+AurelionSol
 Kayle
-Vel'Koz
 Urgot
 Xerath
 Corki
@@ -100,20 +102,20 @@ Ornn
 Graves
 Garen
 Nunu
+RekSai
 Zilean
 Ivern
 Kayn
 Pantheon
-Jarvan IV
 Illaoi
 Twitch
 Draven
 Diana
+TahmKench
 Viktor
 Xayah
-Aurelion Sol
+MonkeyKing
 Galio
-Dr. Mundo
 Vladimir
 Shen
 Lux
@@ -126,7 +128,6 @@ Lissandra
 Evelynn
 Poppy
 Gragas
-Lee Sin
 Azir
 Darius
 Jax
@@ -137,6 +138,6 @@ Yorick
 Sion
 Brand
 Riven
-Xin Zhao
+Chogath
 Neeko
 Taliyah

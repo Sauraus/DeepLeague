@@ -7,7 +7,7 @@ import time
 import shutil
 from io import BytesIO
 from collections import Counter
-from PIL import Image
+from PIL import Image, ImageDraw, ImageOps
 from itertools import combinations 
 
 # Args
@@ -81,19 +81,33 @@ def composite_icons(icon_dict, mapping_dict):
 	i = random.randint(0, 17)
 	minimap = Image.open("base_minimap/minimap_blue_%d.png" % i)
 	minimap = minimap.convert('RGBA')
-
+	#minimap = cv2.imread("base_minimap/minimap_blue_%d.png" % i)
+	#minimap = cv2.cvtColor(minimap, cv2.COLOR_BGR2RGB)
 	# We resize the images such that we train on various size minimaps because players can resize their minimaps
 	# We use this https://github.com/AlexeyAB/darknet/blob/master/scripts/gen_anchors.py to calculate the YOLO2 anchors before training
-	size = random.randint(150, 200)
+	size = 295 #random.randint(150, 200)
 	ratio = 295 / size
 	npzdata = []
 	data = []
+	red = True
 
 	for champion, value in icon_dict.items():
-		icon = Image.fromarray(np.uint8(value[0]))
+		image = np.uint8(value[0])
+		icon = Image.fromarray(image)
 		icon = icon.convert('RGBA')
-		icon_size = random.randint(26, 30)
-		icon = icon.resize((icon_size, icon_size), resample=Image.BILINEAR)
+		(icon_w_size, icon_h_size) = icon.size
+		#icon_h_size = random.randint(21,24)
+		#icon = icon.resize((icon_w_size, icon_h_size), resample = Image.BILINEAR)
+
+		color = (80,160,255,115)
+		if red:
+			color = (235,50,40,155)
+			red = False
+		else:
+			red = True
+
+		draw = ImageDraw.Draw(icon)
+		draw.ellipse((0, 0, icon_w_size, icon_h_size), outline = color)
 
 	    # Choose a random x,y position for the icon
 		paste_position = (value[1], value[2])
@@ -114,12 +128,13 @@ def composite_icons(icon_dict, mapping_dict):
 	    
 	 	# Get the smallest & largest non-zero values in each dimension and calculate the bounding box
 		nz = np.nonzero(hard_mask)
-		x_min, x_max = np.min(nz[1]) / ratio, np.max(nz[1]) / ratio
-		y_min, y_max = np.min(nz[0]) / ratio, np.max(nz[0]) / ratio
+		# Increase bounding box to include opaque border
+		x_min, x_max = (np.min(nz[1]) / ratio) - 2, (np.max(nz[1]) / ratio) + 2
+		y_min, y_max = (np.min(nz[0]) / ratio) - 2, (np.max(nz[0]) / ratio) + 2
 		# bbox = [x_min, y_min, x_max, y_max] 
 		# cntr = (x_min+ int((x_max-x_min)/2), y_min+int((y_max-y_min)/2))
 		npzdata.append((mapping_dict[champion[:-4]], int(x_min), int(y_min), int(x_max), int(y_max)))
-		data.append((mapping_dict[champion[:-4]], (x_min + ((x_max - x_min) / 2)) / size, (y_min + ((y_max - y_min) / 2)) / size, (28 / ratio) / size, (28 / ratio) / size))
+		data.append((mapping_dict[champion[:-4]], (x_min + ((x_max - x_min) / 2)) / size, (y_min + ((y_max - y_min) / 2)) / size, (icon_w_size / ratio) / size, (icon_h_size / ratio) / size))
 	npz_data = np.asarray(npzdata)
 	composite = composite.resize((size, size), resample=Image.BILINEAR)
 	return composite, npz_data, data
@@ -130,8 +145,18 @@ def load_icons(input_directory):
 	for file in os.scandir(input_directory):
 		if file.name[-4:] == ".png":
 			icon = Image.open(file.path)
-			icon = icon.convert('RGBA')
-			icon_dict[file.name] = icon
+			icon = icon.convert('RGB')
+			icon = icon.crop((3, 3, 117, 117))
+			resize = icon.resize((25, 25), resample = Image.BILINEAR)
+			npImage = np.array(resize)
+			h, w = resize.size
+			alpha = Image.new('L', resize.size, 0)
+			draw = ImageDraw.Draw(alpha)
+			draw.ellipse((0, 0, h, w),fill=255) 
+			npAlpha = np.array(alpha)
+			npImage = np.dstack((npImage, npAlpha))
+			final = Image.fromarray(npImage)
+			icon_dict[file.name] = final
 			icon_list.append(file.name)
 			mapping[file.name[:-4]] = count
 			count+=1
@@ -144,11 +169,11 @@ def randomize_icons(icon_dict, icon_list, number_of_champs_per_minimap):
 	random_champions_dict = {}
 	for champion in random_champions:
 		champion_frame = icon_dict[champion]
-		random_champions_dict[champion] = (champion_frame, random.randint(5, 260), random.randint(5, 260))
+		random_champions_dict[champion] = (champion_frame, random.randint(30, 265), random.randint(30, 265))
 	return random_champions_dict
 
 def generate_txt(number_of_images, number_of_champs_per_minimap, output_directory):
-	icon_dict, icon_list, mapping_dict, number_of_champs = load_icons("minimap_icons_28x28")
+	icon_dict, icon_list, mapping_dict, number_of_champs = load_icons("champions")
 	max_num_per_champ = int(number_of_images / number_of_champs) * number_of_champs_per_minimap
 	print("Generating %d minimap(s) with %d champions per minimap (max %d) from %d champions" % (number_of_images, number_of_champs_per_minimap, max_num_per_champ, number_of_champs))
 	champion_counter = Counter()
@@ -179,7 +204,7 @@ def generate_txt(number_of_images, number_of_champs_per_minimap, output_director
 			outfile = os.path.join(output_dir, "minimap_" + str(i))
 			with open((outfile + '.txt'), 'w') as fp:
 				fp.write('\n'.join('%s %f %f %f %f' % x for x in bbox))
-			composite_image.save(outfile + '.jpg', "JPEG", quality=random.randint(45, 65), optimize=True, progressive=True)
+			composite_image.save(outfile + '.jpg', "JPEG", quality=99, optimize=True, progressive=True)
 			if i%5000 == 0:
 				output_dir = os.path.join(output_directory, ('img' + str(i)))
 				if not os.path.exists(output_dir):
@@ -194,7 +219,7 @@ def generate_txt(number_of_images, number_of_champs_per_minimap, output_director
 		print(key, ":", value)
 
 def generate(number_of_npz_files, number_of_images, number_of_champs_per_minimap, output_directory):
-	icon_dict, icon_list, mapping_dict, number_of_champs = load_icons("minimap_icons_28x28")
+	icon_dict, icon_list, mapping_dict, number_of_champs = load_icons("champions")
 	max_num_per_champ = int(number_of_images / number_of_champs) * number_of_champs_per_minimap
 	print("Generating %d minimap(s) across %d .npz file(s) with %d champions per minimap (max %d) from %d champions" % 
 		(number_of_images, number_of_npz_files, number_of_champs_per_minimap, max_num_per_champ, number_of_champs))
