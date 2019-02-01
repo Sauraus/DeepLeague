@@ -78,15 +78,16 @@ parser_dump.add_argument(
 	default='dump')
 
 def composite_icons(icon_dict, mapping_dict):
-	i = random.randint(0, 17)
-	minimap = Image.open("base_minimap/minimap_blue_%d.png" % i)
+	i = random.randint(11, 12)
+	minimap = Image.open("base_minimap/map%d.png" % i)
 	minimap = minimap.convert('RGBA')
 	#minimap = cv2.imread("base_minimap/minimap_blue_%d.png" % i)
 	#minimap = cv2.cvtColor(minimap, cv2.COLOR_BGR2RGB)
 	# We resize the images such that we train on various size minimaps because players can resize their minimaps
 	# We use this https://github.com/AlexeyAB/darknet/blob/master/scripts/gen_anchors.py to calculate the YOLO2 anchors before training
-	size = 295 #random.randint(150, 200)
-	ratio = 295 / size
+	minimap = minimap.resize((280, 280), resample = Image.BILINEAR)
+	size = 280 #random.randint(150, 200)
+	ratio = 280 / size
 	npzdata = []
 	data = []
 	red = True
@@ -169,7 +170,7 @@ def randomize_icons(icon_dict, icon_list, number_of_champs_per_minimap):
 	random_champions_dict = {}
 	for champion in random_champions:
 		champion_frame = icon_dict[champion]
-		random_champions_dict[champion] = (champion_frame, random.randint(30, 265), random.randint(30, 265))
+		random_champions_dict[champion] = (champion_frame, random.randint(30, 250), random.randint(30, 250))
 	return random_champions_dict
 
 def generate_txt(number_of_images, number_of_champs_per_minimap, output_directory):
@@ -204,7 +205,7 @@ def generate_txt(number_of_images, number_of_champs_per_minimap, output_director
 			outfile = os.path.join(output_dir, "minimap_" + str(i))
 			with open((outfile + '.txt'), 'w') as fp:
 				fp.write('\n'.join('%s %f %f %f %f' % x for x in bbox))
-			composite_image.save(outfile + '.jpg', "JPEG", quality=99, optimize=True, progressive=True)
+			composite_image.save(outfile + '.jpg', "JPEG", quality=random.randint(80,100), optimize=True, progressive=True)
 			if i%5000 == 0:
 				output_dir = os.path.join(output_directory, ('img' + str(i)))
 				if not os.path.exists(output_dir):
