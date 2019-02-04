@@ -45,8 +45,8 @@ argparser.add_argument(
     action='store_true')
 
 YOLO_ANCHORS = np.array(
-    ((0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434),
-     (7.88282, 3.52778), (9.77052, 9.16828)))
+    ((1.101698, 1.101698), (1.101698, 1.101698), (1.101698, 1.101698),
+     (1.101698, 1.101698), (1.101698, 1.101698)))
 
 class TrainingData:
     # the dataset is broken up in to "clusters"
