@@ -45,8 +45,7 @@ argparser.add_argument(
     action='store_true')
 
 YOLO_ANCHORS = np.array(
-    ((1.101698, 1.101698), (1.101698, 1.101698), (1.101698, 1.101698),
-     (1.101698, 1.101698), (1.101698, 1.101698)))
+    ((1.101698, 1.101698)))
 
 class TrainingData:
     # the dataset is broken up in to "clusters"
@@ -181,7 +180,7 @@ def _main(args):
         print("RUNNING IN DEBUG MODE, 1 RUN FOR EPOCS ONLY")
         batches = {'BATCH_SIZE_1': 2, 'BATCH_SIZE_2' : 2, 'BATCH_SIZE_3' : 2, 'EPOCHS_1': 1, 'EPOCHS_2': 1, 'EPOCHS_3': 1}
     else:
-        batches = {'BATCH_SIZE_1': 32, 'BATCH_SIZE_2' : 8, 'BATCH_SIZE_3' : 8, 'EPOCHS_1': 4, 'EPOCHS_2': 16, 'EPOCHS_3': 16}
+        batches = {'BATCH_SIZE_1': 32, 'BATCH_SIZE_2' : 16, 'BATCH_SIZE_3' : 8, 'EPOCHS_1': 5, 'EPOCHS_2': 30, 'EPOCHS_3': 30}
 
     data_path = os.path.expanduser(args.data_path)
     classes_path = os.path.expanduser(args.classes_path)
@@ -256,7 +255,7 @@ def process_data(images, boxes=None):
     orig_size = np.expand_dims(orig_size, axis=0)
 
     # Image preprocessing.
-    processed_images = [i.resize((416, 416), PIL.Image.BICUBIC) for i in images]
+    processed_images = [i.resize((288, 288), PIL.Image.BICUBIC) for i in images]
     processed_images = [np.array(image, dtype=np.float) for image in processed_images]
     processed_images = [image/255. for image in processed_images]
 
@@ -302,7 +301,7 @@ def get_detector_mask(boxes, anchors):
     detectors_mask = [0 for i in range(len(boxes))]
     matching_true_boxes = [0 for i in range(len(boxes))]
     for i, box in enumerate(boxes):
-        detectors_mask[i], matching_true_boxes[i] = preprocess_true_boxes(box, anchors, [416, 416])
+        detectors_mask[i], matching_true_boxes[i] = preprocess_true_boxes(box, anchors, [288, 288])
 
     return np.array(detectors_mask), np.array(matching_true_boxes)
 
@@ -324,11 +323,11 @@ def create_model(anchors, class_names, load_pretrained=True, freeze_body=True):
 
     '''
 
-    detectors_mask_shape = (13, 13, 5, 1)
-    matching_boxes_shape = (13, 13, 5, 5)
+    detectors_mask_shape = (9, 9, len(anchors), 1)
+    matching_boxes_shape = (9, 9, len(anchors), 5)
 
     # Create model input layers.
-    image_input = Input(shape=(416, 416, 3))
+    image_input = Input(shape=(288, 288, 3))
     boxes_input = Input(shape=(None, 5))
     detectors_mask_input = Input(shape=detectors_mask_shape)
     matching_boxes_input = Input(shape=matching_boxes_shape)
